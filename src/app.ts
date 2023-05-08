@@ -2,12 +2,10 @@ import bodyParser from 'body-parser';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import helmet from 'helmet';
-import { Router } from 'express';
-
-interface Controller {
-  router: Router;
-  path: string;
-}
+import hpp from 'hpp';
+import cors from 'cors';
+import errorMiddleware from './middleware/error.middleware';
+import Controller from './interfaces/controller.interface';
 
 class App {
   public app: express.Application;
@@ -32,6 +30,19 @@ class App {
 
   private initializeStandardMiddlewares() {
     this.app.set('trust proxy', true);
+
+    // Ignore big payloads
+    this.app.use(
+      express.urlencoded({
+        extended: true,
+        limit: '100mb',
+      })
+    );
+    this.app.use(
+      express.json({
+        limit: '100mb',
+      })
+    );
     this.app.use(bodyParser.json());
     this.app.use(
       express.urlencoded({
@@ -45,15 +56,56 @@ class App {
         contentSecurityPolicy: false,
       })
     );
+
+    // Protect against HTTP Parameter Pollution
+    this.app.use(hpp());
+
+    // Protect against multiple things
+    this.app.use(
+      helmet({
+        contentSecurityPolicy: false,
+      })
+    );
+
+    this.app.use('/checks', (_req, res) => res.send('OK'));
+
+    // Enable CORS
+    this.app.use(
+      cors({
+        origin: (origin, callback) => {
+          // allow requests with no origin
+          // (like mobile apps or curl requests)
+          if (!origin) {
+            return callback(null, true);
+          }
+
+          // Allow localhost on non production envs
+          if (
+            origin.match(/localhost/) &&
+            process.env.NODE_ENV !== 'production'
+          ) {
+            return callback(null, true);
+          }
+
+          if (!origin.match(/fuze.finance/)) {
+            const msg = `The CORS policy for this site does not allow access from the specified origin.`;
+            return callback(new Error(msg), false);
+          }
+
+          return callback(null, true);
+        },
+        credentials: true,
+      })
+    );
   }
 
   private initializeControllers(controllers: readonly Controller[]) {
-    this.app.use('/checks', (_, response) =>
-      response.send('Backend is up and running!!')
-    );
     controllers.forEach((controller) => {
       this.app.use('/', controller.router);
     });
+
+    // Error Handling
+    this.app.use(errorMiddleware);
   }
 }
 
